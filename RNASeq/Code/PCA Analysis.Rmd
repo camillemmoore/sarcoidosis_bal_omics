@@ -1,0 +1,202 @@
+---
+title: Report
+author: |
+ | Project: `r CIDAtools::ProjectName()`
+ |
+ | Analyst: `r CIDAtools::ProjectAnalyst()`
+ |
+ | Investigator(s): `r CIDAtools::ProjectPI()`
+ |
+ | Report generated: `r paste(format(Sys.Date(), '%B %d, %Y'))`
+output:
+  html_document:
+    highlight: espresso
+    number_sections: yes
+    theme: yeti
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+```{r, echo=FALSE, warning = F, out.width='70%', fig.show='hold'}
+logo <- system.file("figures", "sph_cida_wm_blk.png", package="CIDAtools")
+knitr::include_graphics(logo)
+```
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = F)
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(openxlsx)
+library(edgeR)
+library(DESeq2)
+library(plotly)
+library(tableone)
+library(DT)
+```
+
+```{r}
+`%notin%` <- Negate(`%in%`)
+
+options(future.globals.maxSize = 100*1000 * 1024^2)
+
+dataDir <- "P:/BRANCHES/NJHMoore_CBD_Sarcoidosis/maier_bulkRNASeq_paperAnalysis/DataRaw/"
+outDir  <- "P:/BRANCHES/NJHMoore_CBD_Sarcoidosis/maier_bulkRNASeq_paperAnalysis/"
+ntab <- 1
+nfig <- 1
+
+pheno.data <- read.xlsx(paste0(dataDir, "sarc meth data with phenotype.xlsx"), detectDates = TRUE)
+pheno.data.fltrd <- pheno.data[pheno.data$Phenotype %in% c("P", "NP", "control"), ]
+pheno.data.fltrd$Date.of.Birth <- as.Date(pheno.data.fltrd$Date.of.Birth)
+pheno.data.fltrd$date.of.sample <- as.Date(pheno.data.fltrd$date.of.sample)
+pheno.data.fltrd$Age.at.sampling <- trunc((pheno.data.fltrd$Date.of.Birth %--% pheno.data.fltrd$date.of.sample) / years(1))
+raw.counts <- read.xlsx(paste0(dataDir, "bal_cd4+_rnaseqc_rnaseq_reads.xlsx"))
+all_md <- pheno.data.fltrd
+
+# Removing outliers
+#outliers <- c("39810", "33042", "16092")
+#all_md <- all_md[!c(all_md$Sample.ID %in% outliers), ]
+
+counts <- raw.counts
+sample.id.raw <- colnames(counts)[-c(1:2)]
+sample.id <- gsub(".{1}$", "", (sapply(strsplit(sample.id.raw, "_"), "[[", 2)))
+all_md <- all_md[all_md$Sample.ID %in% sample.id, ]
+all_md <- all_md %>%
+  distinct(Sample.ID, .keep_all = TRUE)
+colnames(counts)[-c(1:2)] <- sample.id
+rownames(all_md) <- all_md$Sample.ID
+all_md$Sample.ID <- as.character(all_md$Sample.ID)
+
+# set the rownmaes of the count matrix to the ensembl gene ID
+rownames(counts) <- counts$Name
+
+# save the gene names in a vector to help label results later
+genes <- counts$Description
+names(genes) <- counts$Name
+
+# Subset the count matrix to columns for samples in the meta data file
+counts <- counts[,colnames(counts) %in% rownames(all_md)]
+
+# Similarly, subset MD to only those samples in the RNAseq data
+all_md <- all_md[colnames(counts),]
+
+# Filter out lowly expressed genes####
+dgList <- DGEList(counts = counts)
+
+countsPerMillion <- cpm(dgList)
+countCheck <- countsPerMillion > 1
+keep <- which(rowSums(countCheck) >= 8) # I usually include genes with at least 1 CPM in N samples where N is the sample size of the smallest group
+dgList <- dgList[keep,]
+
+# 16,099 genes left
+counts.filtered <- counts#[names(keep),]
+
+# Make a DESeq2 object and normalize the data ####
+
+# gene or feature data
+fdata <- data.frame(geneid = names(genes) , gene_name = genes)
+rownames(fdata) <- names(genes)
+
+fdata <- fdata[rownames(counts.filtered),]
+
+# Create DESeq2 Dataset and Model
+dds <- DESeqDataSetFromMatrix(countData = counts.filtered, colData = all_md,
+                              design = ~ Birth.sex + Age.at.sampling + Phenotype, rowData = fdata)
+dds <- DESeq(dds)
+
+# get variance stabilized expression values
+vsd <- varianceStabilizingTransformation(dds)
+expr_vst <- assay(vsd)
+
+# PCA of top 1000 most variable genes ####
+
+# find the 1000 most variable genes
+var_genes <- apply(expr_vst, 1, var)
+var_genes <- var_genes[order(var_genes, decreasing=T)]
+
+pcs <- prcomp(t(expr_vst))#[names(var_genes)[1:1000],]))
+percentVar <- pcs$sdev^2/sum(pcs$sdev^2)
+
+all_md <- cbind(all_md[colnames(expr_vst),],
+                PC1=pcs$x[,1], PC2=pcs$x[,2], PC3=pcs$x[,3], PC4=pcs$x[,4])
+
+```
+
+```{r}
+plot(all_md$PC1, all_md$PC2)
+
+all_md[which(all_md$PC1 < -100), c("Sample.ID", "PC1", "PC2")]
+```
+
+
+```{r}
+#md_sarc <- all_md %>% filter(Dx == "Sarc")
+
+tab1 <- all_md %>% select(Sample.ID, Dx, Birth.sex, Age.at.diagnosis, Age.at.sampling)
+
+datatable(tab1, extensions = c('Buttons', 'KeyTable', "FixedHeader"),
+          options = list(dom = 'lBftrip',
+                         buttons = c('copy', 'csv', 'excel', 'print'),
+                         keys = TRUE,
+                         searchHighlight = TRUE,
+                         pageLength = 10,
+                         lengthMenu = c("10", "25", "50", "100"),
+                         scrollX  = TRUE), rownames = FALSE)
+```
+
+# Project Summary
+
+# Introduction
+
+Introduction text
+
+# Methods
+
+Methods text
+
+# Results 
+
+## Descriptive Statistics
+
+Tables/Figures/Results section
+
+*Figure 1*
+```{r}
+data("cars")
+plot(cars$speed, cars$dist, pch = 20)
+```
+
+*Table 1*
+```{r}
+
+# See https://cran.r-project.org/web/packages/table1/vignettes/table1-examples.html
+cars$group <- paste0("Group " , rep(1:2,25))
+label(cars$speed) <- "Speed"
+label(cars$dist) <- "Stopping distance"
+units(cars$speed) <- "mph"
+units(cars$dist) <- "ft"
+table1(~speed + dist | group, data = cars)
+```
+
+
+## Main Analysis
+
+# Conclusions
+
+Interpretations, discussion
+
+# References
+
+# Appendix
+
+<!-- footer -->
+
+---
+
+```{r, echo=FALSE, out.width='70%', fig.show='hold'}
+knitr::include_graphics(logo)
+```
+

@@ -1,0 +1,258 @@
+---
+title: Report
+author: |
+ | Project: `r CIDAtools::ProjectName()`
+ |
+ | Analyst: `r CIDAtools::ProjectAnalyst()`
+ |
+ | Investigator(s): `r CIDAtools::ProjectPI()`
+ |
+ | Report generated: `r paste(format(Sys.Date(), '%B %d, %Y'))`
+output:
+  html_document:
+    code_folding: hide
+    highlight: espresso
+    number_sections: yes
+    theme: yeti
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+
+```{r, echo=FALSE, warning = F, out.width='70%', fig.show='hold'}
+logo <- system.file("figures", "sph_cida_wm_blk.png", package="CIDAtools")
+knitr::include_graphics(logo)
+```
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F, fig.align = "center")
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(openxlsx)
+library(edgeR)
+library(DESeq2)
+library(plotly)
+library(tableone)
+library(DT)
+#library(enrichR)
+```
+
+```{r}
+`%notin%` <- Negate(`%in%`)
+
+options(future.globals.maxSize = 100*1000 * 1024^2)
+
+source("processingData.R")
+
+dataDir <- "P:/BRANCHES/NJHMoore_CBD_Sarcoidosis/maier_bulkRNASeq_paperAnalysis/DataRaw/"
+outDir  <- "P:/BRANCHES/NJHMoore_CBD_Sarcoidosis/maier_bulkRNASeq_paperAnalysis/"
+
+nSmallGroup <- 14
+
+ntab <- 1
+nfig <- 1
+
+outDat <- getDataStarted(dataDir, nSmallGroup)
+counts.filtered <- outDat[[1]]
+all_md <- outDat[[2]]
+fdata <- outDat[[3]]
+genes <- outDat[[4]]
+
+# Create DESeq2 Dataset and Model
+dds <- DESeqDataSetFromMatrix(countData = counts.filtered, colData = all_md,
+                              design = ~ Birth.sex + Dx, rowData = fdata)
+
+dds <- DESeq(dds)
+# get variance stabilized expression values
+vsd <- varianceStabilizingTransformation(dds)
+expr_vst <- assay(vsd)
+
+# PCA of top 1000 most variable genes ####
+
+# find the 1000 most variable genes
+var_genes <- apply(expr_vst, 1, var)
+var_genes <- var_genes[order(var_genes, decreasing=T)]
+pcs <- prcomp(t(expr_vst[names(var_genes)[1:1000],]))
+percentVar <- pcs$sdev^2/sum(pcs$sdev^2)
+all_md <- cbind(all_md[colnames(expr_vst),],
+                PC1=pcs$x[,1], PC2=pcs$x[,2], PC3=pcs$x[,3], PC4=pcs$x[,4])
+
+# Simple DESeq2 Differential Expression Analysis #####
+# Code contrasts to compare groups
+Sarc_v_Control <- results(dds)
+Sarc_v_Control <- Sarc_v_Control[order(Sarc_v_Control$padj),]
+# Add in the gene symbols
+Sarc_v_Control$gene <- genes[rownames(Sarc_v_Control)]
+```
+
+# Background
+
+Code sourced from Arunangshu Sarkar. This report was generated to recreate results located in html reports previously created by Arunangshu Sarkar. The PCA analysis part of this report verifies results found in the Interactive-PCA-plots-corrected-data-non-sarc-removed.html dated 11/07/2022. The differential gene expression and gene enrichment analysis found in Preliminary_analysis_DESeq2_Sex_only_corrected_sex_non-sarc_removed_Maier_blkRNASeq.html dates 12/16/2022. Source code for processing the data is listed in the appendix. 
+
+# Methods
+
+Genes were only included if there were at least 14 samples (the number of samples in the smallest group) with at least 1 counts per million (CPM). 
+
+Principle component analysis (PCA) was conducted on the 1,000 most variable gene counts. These gene counts were variance stabilized transformed (VST) using the `vst()` function from DESeq2 using defaults. 
+
+A Wald test was used to compare Sarcoidosis diagnosis to Control. Sex was included in the DESeq2 Model. To correct for multiple testing the Benjamini and Hochberg False Discovery Rate (FDR) was used. 
+
+# Results 
+
+There are `r ncol(counts.filtered)` subjects and `r prettyNum(nrow(counts.filtered), big.mark = ",")` genes included in the analysis. 
+
+## PCA 
+
+The results were replicated for the PC analysis. 
+
+### Metadata Table
+
+```{r}
+tab_meta <- all_md %>% select(Sample.ID, Dx, Birth.sex, Age.at.diagnosis, Age.at.sampling) 
+datatable(tab_meta, extensions = c('Buttons', 'KeyTable', "FixedHeader"),
+          options = list(dom = 'lBftrip',
+                         buttons = c('copy', 'csv', 'excel', 'print'),
+                         keys = TRUE,
+                         searchHighlight = TRUE,
+                         pageLength = 10,
+                         lengthMenu = c("10", "25", "50", "100"),
+                         scrollX  = TRUE), rownames = FALSE)
+```
+
+To reduce the number of plots that express the same information I included color coding by diagnosis for all plots. 
+
+### Interactive PCA Plots 
+
+```{r}
+ggplotly(all_md %>% ggplot(aes(x = PC1, y = PC2, id = Sample.ID, color = Dx)) + geom_point() + theme_bw())
+ggplotly(all_md %>% ggplot(aes(x = PC1, y = PC3, id = Sample.ID, color = Dx)) + geom_point() + theme_bw())
+ggplotly(all_md %>% ggplot(aes(x = PC1, y = PC4, id = Sample.ID, color = Dx)) + geom_point() + theme_bw())
+ggplotly(all_md %>% ggplot(aes(x = PC2, y = PC3, id = Sample.ID, color = Dx)) + geom_point() + theme_bw())
+ggplotly(all_md %>% ggplot(aes(x = PC2, y = PC4, id = Sample.ID, color = Dx)) + geom_point() + theme_bw())
+ggplotly(all_md %>% ggplot(aes(x = PC3, y = PC4, id = Sample.ID, color = Dx)) + geom_point() + theme_bw())
+```
+
+## Differential Gene Expression Results
+
+**Table `r ntab`. Population Demographics**
+
+```{r}
+# double check rows of MD and columns of counts match / are ordered correctly
+#table(rownames(all_md)==colnames(counts))
+t1 <- CreateTableOne(vars = c('Age.at.sampling', 'Birth.sex', 'Race', 'Hispanic', 'Smoking.Status'), 
+                     strata = 'Phenotype', data = all_md)
+t1.print <- print(t1, nonnormal = 'Age.at.sampling', exact = c('Birth.sex', 'Race', 'Hispanic', 'Smoking.Status'),  printToggle = FALSE)
+
+t1.print[which(t1.print == " 1.000")] <- "> 0.99"
+
+t1.print %>% kable(align = "c", col.names = c("Control", "Non-progressive", "Progressive", "p-value", "Test Used")) %>%
+  kable_paper("hover", full_width = T)
+```
+
+
+### Sarcoidosis vs Control Comparision 
+
+```{r}
+Sarc_v_Control_df <- data.frame(Sarc_v_Control)
+Sarc_v_Control_df <- Sarc_v_Control_df %>% relocate(gene)
+Sarc_v_Control_df$foldChange <- 2^(Sarc_v_Control_df$log2FoldChange)
+non_pval_col <- colnames(Sarc_v_Control_df)[!colnames(Sarc_v_Control_df) %in% c("gene", "pvalue", "padj")]
+Sarc_v_Control_df[, non_pval_col] <- apply(Sarc_v_Control_df[, non_pval_col], 2, function(x) round(x, 4))
+pval_col <- c("pvalue", "padj")
+Sarc_v_Control_df[, pval_col] <- apply(Sarc_v_Control_df[, pval_col], 2, function(x) round(x, 8))
+```
+
+`r nrow(Sarc_v_Control_df %>% filter(padj < 0.05))` genes were significantly differ between the Sarcoidosis and Control samples (FDR < 0.05). There was an additional `r nrow(Sarc_v_Control_df %>% filter(padj >= 0.05 & padj < 0.1))` genes that were nominally differ (FDR < 0.1). 
+
+**Table `r ntab`. Sarcoidosis v Control Results**
+
+```{r}
+ntab <- ntab + 1
+datatable(Sarc_v_Control_df %>% select(gene, baseMean, log2FoldChange, stat, pvalue, padj),
+          extensions = c('Buttons', 'KeyTable', "FixedHeader"),
+          options = list(dom = 'lBftrip',
+                         buttons = c('copy', 'csv', 'excel', 'print'),
+                         keys = TRUE,
+                         searchHighlight = TRUE,
+                         pageLength = 10,
+                         lengthMenu = c("10", "25", "50", "100"),
+                         scrollX  = TRUE), rownames = FALSE)
+```
+
+**Figure `r nfig`. Volcano Plot**
+
+```{r}
+nfig <- nfig + 1
+
+volPlot <- Sarc_v_Control_df %>% mutate(threshold = ifelse(padj < 0.05, "FDR < 0.05", "FDR > 0.05")) %>% 
+           filter(is.na(threshold) == F) %>%
+           ggplot(aes(x = log2FoldChange, y = -log10(padj), color = threshold, label = gene)) + 
+           geom_point() +
+           labs(x = "log2 fold change", y = "-log10 adjusted p-value", color = "") + 
+           theme(legend.position = "none", legend.title = element_blank(), 
+                 plot.title = element_text(size = rel(1.5), hjust = 0.5), 
+                 axis.title = element_text(size = rel(1.25))) +
+           theme_bw()
+
+ggplotly(volPlot)
+```
+
+```{r, include = F, eval = F}
+## Enrichment Analysis Results
+
+geneOut <- doEnrichment(Sarc_v_Control)
+#geneset_down, geneset_up, enriched_down, enriched_up
+geneDown <- geneOut[[1]]
+geneUp   <- geneOut[[2]]
+enrichDown <- geneOut[[3]]
+enrichUp   <- geneOut[[4]]
+
+enrichUp <- data.frame(enrichUp)
+enrichUp$Odds.Ratio <- round(enrichUp$Odds.Ratio, digits = 4)
+enrichUp$Combined.Score <- round(enrichUp$Combined.Score, digits = 4)
+enrichUp$P.value <- round(enrichUp$P.value, digits = 8)
+enrichUp$Adjusted.P.value <- round(enrichUp$Adjusted.P.value, digits = 8)
+datatable(enrichUp,
+          extensions = c('Buttons', 'KeyTable', "FixedHeader"),
+          options = list(dom = 'lBftrip',
+                         buttons = c('copy', 'csv', 'excel', 'print'),
+                         keys = TRUE,
+                         searchHighlight = TRUE,
+                         pageLength = 10,
+                         lengthMenu = c("10", "25", "50", "100"),
+                         scrollX = TRUE),
+          rownames = FALSE)
+
+```
+
+# Conclusions
+
+The results were recreated, so I have the information to move forward to recreate the results that are in the paper. 
+
+# References
+
+# Appendix
+
+**Source Code: ProcessingData.R**
+
+```{r}
+readLines('processingData.R')
+```
+
+**Session Information**
+
+```{r}
+sessionInfo()
+```
+
+<!-- footer -->
+
+---
+
+```{r, echo=FALSE, out.width='70%', fig.show='hold'}
+knitr::include_graphics(logo)
+```
+

@@ -1,0 +1,352 @@
+---
+title: Differential Gene Expression for Maier Bulk RNA-Seq
+subtitle: Compares Progressive vs Non-Progressive, Progressive vs Control, and Non-Progressive vs Control
+author: |
+ | Project: `r CIDAtools::ProjectName()`
+ |
+ | Analyst: `r CIDAtools::ProjectAnalyst()`
+ |
+ | Investigator(s): `r CIDAtools::ProjectPI()`
+ |
+ | Report generated: `r paste(format(Sys.Date(), '%B %d, %Y'))`
+output:
+  html_document:
+    toc: true
+    toc_float: yes
+    number_sections: yes
+    theme: yeti
+    highlight: espresso 
+    code_folding: hide
+---
+
+```{r, echo=FALSE, warning = F, out.width='70%', fig.show='hold'}
+logo <- system.file("figures", "sph_cida_wm_blk.png", package="CIDAtools")
+knitr::include_graphics(logo)
+```
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F, fig.align = "center")
+```
+
+```{r}
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(openxlsx)
+library(edgeR)
+library(DESeq2)
+library(plotly)
+library(tableone)
+library(DT)
+library(enrichR)
+
+`%notin%` <- Negate(`%in%`)
+
+options(future.globals.maxSize = 100*1000 * 1024^2)
+
+source("processingData.R")
+source("XX_formattingFunctions.R")
+source("XX_enrichmentFunctions.R")
+
+dataDir <- "P:/BRANCHES/NJHMoore_CBD_Sarcoidosis/maier_bulkRNASeq_paperAnalysis/DataRaw/"
+outDir  <- "P:/BRANCHES/NJHMoore_CBD_Sarcoidosis/maier_bulkRNASeq_paperAnalysis/"
+ntab <- 1
+nfig <- 1
+
+outDat <- getDataStarted(dataDir, 6, outliers = T)
+counts.filtered <- outDat[[1]]
+all_md <- outDat[[2]]
+fdata <- outDat[[3]]
+genes <- outDat[[4]]
+
+# Create DESeq2 Dataset and Model
+dds <- DESeqDataSetFromMatrix(countData = counts.filtered, colData = all_md,
+                              design = ~ Birth.sex + Phenotype, rowData = fdata)
+dds_lrt <- DESeq(dds, test = "LRT", reduced = ~Birth.sex)
+dds <- DESeq(dds)
+
+# Code contrasts to compare groups
+P_v_NP       <- results(dds, contrast = c(0, 0, -1, 1))
+P_v_Control  <- results(dds, contrast = c(0, 0,  0, 1))
+NP_v_Control <- results(dds, contrast = c(0, 0,  1, 0))
+
+# Order results by p-value
+P_v_NP <- P_v_NP[order(P_v_NP$padj), ]
+P_v_Control <- P_v_Control[order(P_v_Control$padj), ]
+NP_v_Control <- NP_v_Control[order(NP_v_Control$padj), ]
+
+# Add in the gene symbols
+P_v_NP$gene <- genes[rownames(P_v_NP)]
+P_v_Control$gene <- genes[rownames(P_v_Control)]
+NP_v_Control$gene <- genes[rownames(NP_v_Control)]
+
+# save the results
+#write.xlsx(list(P_v_NP = P_v_NP, P_v_Control = P_v_Control, NP_v_Control = NP_v_Control),
+#           paste0(outDir, 'DataProcessed/P_v_NP_v_C_outliers_removed_Maier_BlkRNASeq.xlsx'), rowNames=T, overwrite=T)
+```
+
+# Background
+
+Code sourced from Arunangshu Sarkar. This report was generated to recreate results located in html reports previously created by Arunangshu Sarkar. The differential gene expression and gene enrichment analysis found in NPvsPvsC_Preliminary_DEanalysis_outliers_removed_Maier_blkRNASeq.html dated 01/04/2023. Source code for processing the data is listed in the appendix.
+
+# Methods
+
+Genes were only included if there were at least 6 samples (the number of samples in the smallest group) with at least 1 counts per million (CPM). 
+
+Samples were evaluated for outliers using principle component analysis (PCA), these samples were removed from analysis and details on the PCA located in *Preliminary_Sarc_withOutliers_redo.Rmd*. 
+
+A Wald test was used to compare the three different combinations of progressive sarcoidosis, non-progressive sarcoidosis, and control. Sex was included in the DESeq2 Model. To correct for multiple testing the Benjamini and Hochberg False Discovery Rate (FDR) was used. 
+
+Genes were determined to be up-regulated if the log2(Fold Change) was positive and down-regulated if negative. An enrichment analysis was conducted for the top 100 up-regulated gene by p-value and for the top 100 down-regulated genes by p-value. The R package (enrichR) were interfaces with the web server tool Enrichr was used to conduct this analysis. The databases BioPlanet_2019, Reactome_2016, GO_Biological_Process_2021, GO_Molecular_Function_2018, GO_Cellular_Component_2018, ARCHS4_Tissues, KEGG_2019_Human, MSigDB_Hallmark_2020, and  WikiPathways_2019_Human were included. 
+
+Code for HTML at: /Moore/proj/maier_bulkRNASeq/maier_bulkRNASeq_paperAnalysis/Code/NPvsPvsC_prelimDE_outliersOut_REDO.RMD on the Discovery Server NJH. 
+
+# Results 
+
+3 subjects (39810, 33042, 16092) were identified as outliers in PCA plots and excluded from the analysis. There are 30 subjects and `r prettyNum(nrow(counts.filtered), big.mark = ",")` genes included in the analysis. 
+
+**Table `r ntab`. Population Demographics**
+
+```{r}
+# double check rows of MD and columns of counts match / are ordered correctly
+#table(rownames(all_md)==colnames(counts))
+t1 <- CreateTableOne(vars = c('Age.at.sampling', 'Birth.sex', 'Race', 'Hispanic', 'Smoking.Status'), 
+                     strata = 'Phenotype', data = all_md)
+t1.print <- print(t1, nonnormal = 'Age.at.sampling', exact = c('Birth.sex', 'Race', 'Hispanic', 'Smoking.Status'),  printToggle = FALSE)
+
+t1.print[which(t1.print == " 1.000")] <- "> 0.99"
+
+ntab <- ntab + 1
+t1.print %>% kable(align = "c", col.names = c("Control", "Non-progressive", "Progressive", "p-value", "Test Used")) %>%
+  kable_paper("hover", full_width = T)
+```
+
+## Differential Gene Expression Results
+
+### Progressive vs Non-Progressive Comparision 
+
+```{r}
+P_v_NP_df <- formatDat(P_v_NP)
+```
+
+`r nrow(P_v_NP_df %>% filter(padj < 0.05))` genes were significantly differ between the Progressive and Non-progressive samples (FDR < 0.05). There was an additional `r nrow(P_v_NP_df %>% filter(padj >= 0.05 & padj < 0.1))` genes were nominally differ (FDR < 0.1). 
+
+**Table `r ntab`. Progressive vs Non-Progressive Results**
+
+```{r}
+ntab <- ntab + 1
+getDEResultsTab(P_v_NP_df)
+```
+
+**Figure `r nfig`. Volcano Plot**
+
+```{r}
+nfig <- nfig + 1
+ggplotly(plotVolcano(P_v_NP_df))
+```
+
+### Progressive vs Control Comparision
+
+```{r}
+P_v_Control_df <- formatDat(P_v_Control)
+```
+
+`r nrow(P_v_Control_df %>% filter(padj < 0.05))` genes were significantly differ between the Progressive and Control samples (FDR < 0.05). There was an additional `r nrow(P_v_Control_df %>% filter(padj >= 0.05 & padj < 0.1))` genes were nominally differ (FDR < 0.1). 
+
+**Table `r ntab`. Progressive vs Control Results**
+
+```{r}
+ntab <- ntab + 1
+getDEResultsTab(P_v_Control_df)
+```
+
+**Figure `r nfig`. Volcano Plot**
+
+```{r}
+nfig <- nfig + 1
+ggplotly(plotVolcano(P_v_Control_df))
+```
+
+### Non-Progressive vs Control Comparision
+
+```{r}
+NP_v_Control_df <- formatDat(NP_v_Control)
+```
+
+`r nrow(NP_v_Control_df %>% filter(padj < 0.05))` genes were significantly differ between the Non-progressive and Control samples (FDR < 0.05). There was an additional `r nrow(NP_v_Control_df %>% filter(padj >= 0.05 & padj < 0.1))` genes were nominally differ (FDR < 0.1). 
+
+**Table `r ntab`. Non-Progressive vs Control Results**
+
+```{r}
+ntab <- ntab + 1
+getDEResultsTab(NP_v_Control_df)
+```
+
+**Figure `r nfig`. Volcano Plot**
+
+```{r}
+nfig <- nfig + 1
+ggplotly(plotVolcano(NP_v_Control_df))
+```
+
+## Enrichment Analysis Results
+
+Pathways or ontologies were only included below in results table if it meet the significance threshold of 0.05 for the adjusted p-value. 
+
+### Progressive vs Non-Progressive Comparision 
+
+**Table `r ntab`. Significant Pathways and Ontologies for Up-regulated Genes**
+
+```{r, include = F}
+setEnrichrSite("Enrichr") # Human genes
+dbs <- c("BioPlanet_2019", "Reactome_2016", "GO_Biological_Process_2021", "GO_Molecular_Function_2018", "GO_Cellular_Component_2018", "ARCHS4_Tissues", "KEGG_2019_Human", "MSigDB_Hallmark_2020", "WikiPathways_2019_Human")
+
+P_v_NP_enrich <- runEnrichment(P_v_NP)
+P_v_Control_enrich <- runEnrichment(P_v_Control)
+NP_v_Control_enrich <- runEnrichment(NP_v_Control)
+```
+
+```{r}
+ntab <- ntab + 1
+getEnResutltsTab(P_v_NP_enrich[[1]])
+```
+
+**Table `r ntab`. Significant Pathways and Ontologies for Down-regulated Genes**
+
+```{r}
+ntab <- ntab + 1
+getEnResutltsTab(P_v_NP_enrich[[2]])
+```
+
+### Progressive vs Control Comparision
+
+**Table `r ntab`. Significant Pathways and Ontologies for Up-regulated Genes**
+
+```{r}
+ntab <- ntab + 1
+getEnResutltsTab(P_v_Control_enrich[[1]])
+```
+
+**Table `r ntab`. Significant Pathways and Ontologies for Down-regulated Genes**
+
+```{r}
+ntab <- ntab + 1
+getEnResutltsTab(P_v_Control_enrich[[2]])
+```
+
+### Non-Progressive vs Control Comparision
+
+**Table `r ntab`. Significant Pathways and Ontologies for Up-regulated Genes**
+
+```{r}
+ntab <- ntab + 1
+getEnResutltsTab(NP_v_Control_enrich[[1]])
+```
+
+**Table `r ntab`. Significant Pathways and Ontologies for Down-regulated Genes**
+
+```{r}
+ntab <- ntab + 1
+getEnResutltsTab(NP_v_Control_enrich[[2]])
+```
+
+# Conclusions
+
+Interpretations, discussion
+
+# References
+
+# Appendix
+
+**Source Code: ProcessingData.R**
+
+```{r}
+readLines('processingData.R')
+```
+
+**Running the Model**
+
+Code is located within the RMD associated with this HTML report
+
+```{r, eval = F, include = T}
+library(tidyverse)
+library(knitr)
+library(kableExtra)
+library(openxlsx)
+library(edgeR)
+library(DESeq2)
+library(plotly)
+library(tableone)
+library(DT)
+library(enrichR)
+
+`%notin%` <- Negate(`%in%`)
+
+options(future.globals.maxSize = 100*1000 * 1024^2)
+
+source("processingData.R")
+source("XX_formattingFunctions.R")
+source("XX_enrichmentFunctions.R")
+
+dataDir <- "P:/BRANCHES/NJHMoore_CBD_Sarcoidosis/maier_bulkRNASeq_paperAnalysis/DataRaw/"
+outDir  <- "P:/BRANCHES/NJHMoore_CBD_Sarcoidosis/maier_bulkRNASeq_paperAnalysis/"
+ntab <- 1
+nfig <- 1
+
+outDat <- getDataStarted(dataDir, 6, outliers = T)
+counts.filtered <- outDat[[1]]
+all_md <- outDat[[2]]
+fdata <- outDat[[3]]
+genes <- outDat[[4]]
+
+# Create DESeq2 Dataset and Model
+dds <- DESeqDataSetFromMatrix(countData = counts.filtered, colData = all_md,
+                              design = ~ Birth.sex + Phenotype, rowData = fdata)
+dds_lrt <- DESeq(dds, test = "LRT", reduced = ~Birth.sex)
+dds <- DESeq(dds)
+
+# Code contrasts to compare groups
+P_v_NP       <- results(dds, contrast = c(0, 0, -1, 1))
+P_v_Control  <- results(dds, contrast = c(0, 0,  0, 1))
+NP_v_Control <- results(dds, contrast = c(0, 0,  1, 0))
+
+# Order results by p-value
+P_v_NP <- P_v_NP[order(P_v_NP$padj), ]
+P_v_Control <- P_v_Control[order(P_v_Control$padj), ]
+NP_v_Control <- NP_v_Control[order(NP_v_Control$padj), ]
+
+# Add in the gene symbols
+P_v_NP$gene <- genes[rownames(P_v_NP)]
+P_v_Control$gene <- genes[rownames(P_v_Control)]
+NP_v_Control$gene <- genes[rownames(NP_v_Control)]
+
+# save the results
+write.xlsx(list(P_v_NP = P_v_NP, P_v_Control = P_v_Control, NP_v_Control = NP_v_Control),
+           paste0(outDir, 'DataProcessed/P_v_NP_v_C_outliers_removed_Maier_BlkRNASeq.xlsx'), rowNames=T, overwrite=T)
+
+
+## Enrichment analysis
+setEnrichrSite("Enrichr") # Human genes
+dbs <- c("BioPlanet_2019", "Reactome_2016", "GO_Biological_Process_2021", "GO_Molecular_Function_2018", "GO_Cellular_Component_2018", "ARCHS4_Tissues", "KEGG_2019_Human", "MSigDB_Hallmark_2020", "WikiPathways_2019_Human")
+
+P_v_NP_enrich <- runEnrichment(P_v_NP)
+P_v_Control_enrich <- runEnrichment(P_v_Control)
+NP_v_Control_enrich <- runEnrichment(NP_v_Control)
+```
+
+**Session Information**
+
+```{r}
+sessionInfo()
+```
+
+<!-- footer -->
+
+---
+
+```{r, echo=FALSE, out.width='70%', fig.show='hold'}
+knitr::include_graphics(logo)
+```
+
